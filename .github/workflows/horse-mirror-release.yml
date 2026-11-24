@@ -1,0 +1,58 @@
+name: Horse Mesh Mirror Pinned llama.cpp Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Pinned llama.cpp release tag to mirror"
+        required: true
+        default: "b12659"
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror pinned multi-platform binaries and source archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          UPSTREAM: ggml-org/llama.cpp
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mirror
+          ASSETS=(
+            "llama-${TAG}-bin-macos-arm64.tar.gz"
+            "llama-${TAG}-bin-macos-x64.tar.gz"
+            "llama-${TAG}-bin-ubuntu-x64.tar.gz"
+            "llama-${TAG}-bin-ubuntu-arm64.tar.gz"
+            "llama-${TAG}-bin-ubuntu-vulkan-x64.tar.gz"
+            "llama-${TAG}-bin-ubuntu-vulkan-arm64.tar.gz"
+            "llama-${TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz"
+            "llama-${TAG}-bin-ubuntu-rocm-10.0-x64.tar.gz"
+            "llama-${TAG}-bin-win-cpu-x64.zip"
+            "llama-${TAG}-bin-win-cpu-arm64.zip"
+            "llama-${TAG}-bin-win-vulkan-x64.zip"
+            "llama-${TAG}-bin-win-vulkan-arm64.zip"
+            "llama-${TAG}-bin-win-cuda-12.4-x64.zip"
+            "llama-${TAG}-bin-win-rocm-10.0-x64.zip"
+          )
+          gh api "repos/${UPSTREAM}/releases/tags/${TAG}" > /tmp/rel.json
+          COMMIT="$(jq -r '.target_commitish' /tmp/rel.json)"
+          for F in "${ASSETS[@]}"; do
+            URL="$(jq -r --arg n "$F" '.assets[] | select(.name == $n) | .browser_download_url' /tmp/rel.json)"
+            EXP="$(jq -r --arg n "$F" '.assets[] | select(.name == $n) | (.digest // "")' /tmp/rel.json | sed 's/^sha256://')"
+            echo "Mirroring $F..."
+            curl -fsSL "$URL" -o "/tmp/mirror/$F"
+            if [ -n "$EXP" ]; then
+              ACT="$(sha256sum "/tmp/mirror/$F" | awk '{print $1}')"
+              if [ "$ACT" != "$EXP" ]; then
+                echo "SHA256 mismatch for $F: $ACT != $EXP" >&2
+                exit 1
+              fi
+            fi
+          done
+          curl -fsSL "https://github.com/${UPSTREAM}/archive/${COMMIT}.tar.gz" -o "/tmp/mirror/llama-cpp-${TAG}-source.tar.gz"
+          gh release upload "${TAG}" --repo "${GITHUB_REPOSITORY}" --clobber /tmp/mirror/*
